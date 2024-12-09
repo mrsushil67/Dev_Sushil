@@ -20,6 +20,8 @@ const generateAccessAndRefereshTokens=async (userId)=>{
     
   }
 
+  
+
 const registerPartner = async (req,res,next)=>{
 
     const {fullName,email,phoneNumber,password,address}=req.body;
