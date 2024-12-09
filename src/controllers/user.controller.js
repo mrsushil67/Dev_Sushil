@@ -4,7 +4,30 @@ import User from '../models/user.js';  // Assuming your User model is set up
 import cloudinary from '../config/cloudinary.js';
 import {ApiResponse} from '../utils/apiResponse.js';
 import { ApiError } from '../utils/apiError.js';
+import fs from "fs";
+import jwt from 'jsonwebtoken';
+import {Customer} from "../models/customer.js";
+import {Driver} from "../models/driver.js";
 
+import cookieParser from 'cookie-parser';
+import { Partner } from '../models/partner.js';
+
+
+
+const generateAccessAndRefereshTokens=async (userId,type)=>{
+  try{
+    const user = await User.findById(userId);
+    const refreshToken= user.generateRefreshToken(type);
+    const accessToken=user.generateAccessToken(type);
+    user.refreshToken=refreshToken;
+    await user.save({validateBeforeSave:false});
+    return {refreshToken,accessToken}
+  }catch(error){
+    // /console.log(error.message)
+    throw new ApiError(500, error.message||"Something went wrong while generating referesh and access token")
+  }
+  
+}
 // POST: Register a new user
 const registerUser = async (req, res) => {
   const { fullName, email, mobile, password } = req.body;
@@ -88,16 +111,42 @@ const loginUser = async (req, res,next) => {
       throw new ApiError(401,'User does not exist.')
     }
 
+    const type = user.role;
+
+
+
+   const isPasswordValid=await user.isPasswordCorrect(password);
     // Compare the plain text password directly (no hashing)
-    if (user.password !== password) {
+    if(!isPasswordValid){
     
       throw new ApiError(401,'Invalid user credentials.')
     }
 
+    const {accessToken,refreshToken}= await generateAccessAndRefereshTokens(user._id,type);
+    const loggedInUser=await User.findById(user._id).select("-password -refreshToken");
+
+    const options={
+      httpOnly:true,
+      secure:true,
+      sameSite: 'None'
+    }
 
 
+
+    console.log("access token",accessToken)
+    console.log("refresh token",refreshToken)
+    console.log(req.user);
    
-    return res.status(201).json( new ApiResponse(200,{ email: user.email, fullName: user.fullName, photo: user.photo },'Login successful'))
+    return res.status(201)
+    .cookie("accessToken",accessToken,options)
+    .cookie("refersToken",refreshToken,options)
+    .json( new ApiResponse(
+      200, 
+      {
+        user: loggedInUser, accessToken, refreshToken
+    },
+      "User logged In Successfully"
+  ))
   } catch (err) {
     // console.error('Error during login attempt:', err);
     // return res.status(500).json(
@@ -110,66 +159,121 @@ const loginUser = async (req, res,next) => {
 
 // Controller to update user profile with text and file upload
 const updateProfile = async (req, res) => {
-    
-  const { fullName, email, mobile,password} = req.body;  // Extract text fields from body
-  
+  const { fullName, email, phoneNumber, address } = req.body; // Extract text fields from body
 
   try {
-    const userId = '673ddbb366183c22033a9f4d';  // Replace with dynamic user ID if needed
-    const user = await User.findById(userId);
+    const userId = req.user.linkedId; // Replace with dynamic user ID if needed
+    const role = req.user.role;
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    
-   
-    console.log(req.body);
-    
-   
+    let user;
 
-    // Update the user's profile fields
-    user.fullName = fullName || user.fullName;
-    user.email = email || user.email;
-    user.mobile = mobile || user.mobile;
-    user.password = password || user.password;
-    
+    // Fetch user based on role
+    switch (role) {
+      case 'customer':
+        user = await Customer.findById(userId);
+        if (!user) {
+        throw  new ApiError(404,"Customer not found")
+         
+        }
+        // Update customer-specific fields
+        user.fullName = fullName || user.fullName;
+        user.email = email || user.email; // Update email in Customer schema
+        user.phoneNumber = phoneNumber || user.phoneNumber;
+        user.address = address || user.address;
+        break;
 
-    // Save the updated user document
+      case 'partner':
+        user = await Partner.findById(userId);
+        if (!user) {
+        throw  new ApiError(404,"Partner not found")
+        }
+        // Update partner-specific fields
+        user.fullName = fullName || user.fullName;
+        user.email = email || user.email; // Update email in Partner schema
+        user.phoneNumber = phoneNumber || user.phoneNumber;
+        user.businessAddress = address || user.businessAddress;
+        break;
+
+      case 'driver':
+        user = await Driver.findById(userId);
+        if (!user) {
+         throw new ApiError(404,"Driver not found")
+        }
+        // Update driver-specific fields
+        user.fullName = fullName || user.fullName;
+        user.email = email || user.email; // Update email in Driver schema
+        user.phoneNumber = phoneNumber || user.phoneNumber;
+        user.licenseNumber = req.body.licenseNumber || user.licenseNumber; // Optional
+        break;
+
+      default:
+      throw  new ApiError(404,"User not found")    }
+
+    // Save the updated user document for the specific role (Customer/Partner/Driver)
     const updatedUser = await user.save();
     
 
+    const mainUserId=req.user._id;
+    // Now, also update the email in the main User schema to ensure consistency
+    const mainUser = await User.findById(mainUserId); // Get the main User document
+    if (!mainUser) {
+      throw new ApiError(404,"User Not found")    }
+
+    mainUser.email = email || mainUser.email; // Update email in the main User schema
+    const updatedMainUser = await mainUser.save(); // Save the updated main user
+
+    // If saving the main user fails, throw an error
+    if (!updatedMainUser) {
+      throw new ApiError(404,"Failed to update main user email")
+     
+    }
+
     // Log the updated user data to the console (response logging)
     console.log("Updated User Profile:", {
-        fullName: updatedUser.fullName,
-        email: updatedUser.email,
-        mobile: updatedUser.mobile,
-        
-      });
+      fullName: updatedUser.fullName,
+      email: updatedUser.email,
+      phoneNumber: updatedUser.phoneNumber,
+      address: updatedUser.address,
+    });
 
     // Send the success response
-    res.status(200).json({
-      message: "Profile updated successfully",
-      user: {
-        fullName: updatedUser.fullName,
-        email: updatedUser.email,
-        mobile: updatedUser.mobile,
-       
-      }
-    });
+    res.status(200).json(
+      new ApiResponse(200,updatedUser,"Update Successfully")
+    );
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error. Could not update profile." });
   }
 };
 
+
+
 // Fetch user profile by userId
 const getUserProfile = async (req, res) => {
-  const { userId } = req.params;  // Extract userId from URL params
-
+  
+  const userId  =req.user.linkedId;
+  const role=req.user.role;
+  console.log("my req file is ",req.user)
   try {
     // Find the user by userId, excluding the password field
-    const user = await User.findById(userId).select('-password');
+    let user=null;
+    switch(role){
+      case ("customer"):
+      user = await Customer.findById(userId).select('-password');
+      break;
+      case("driver"):
+      user = await Driver.findById(userId).select('-password');
+      break;
+      case("Partner"):
+      user = await Partner.findById(userId).select('-password');
+      break;
 
+      default:
+        throw new ApiError(400,"Invalid user role")
+
+
+    }
+   
     // If user is not found, return an error
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -177,18 +281,11 @@ const getUserProfile = async (req, res) => {
 
     // Log the user object to the terminal for debugging purposes
     console.log('Fetched User Profile:', user);
+    // console.log("access token",accessToken)
+    // console.log("refresh token",refreshToken)
 
     // Send the user profile data in the response
-    res.json({
-      success: true,  // Indicates the request was successful
-      message: 'User profile fetched successfully',  // Success message
-      user: {
-        fullName: user.fullName,
-        email: user.email,
-        mobile: user.mobile,
-        photo: user.photo,  // Include the photo URL from the database
-      }
-    });
+    res.status(201).json(new ApiResponse(200,user,"Fetch User Profile Successfully"))
 
   } catch (err) {
     console.error('Error fetching user profile:', err);
@@ -196,54 +293,173 @@ const getUserProfile = async (req, res) => {
   }
 };
 
-// Middleware to handle image upload and Cloudinary integration
+// handle image upload and Cloudinary integration
 const uploadImage = async (req, res) => {
-  console.log("Received upload request with file:", req.file); // Debugging log
+  console.log("Received upload request with file:", req.files); // Debugging log
 
   try {
     // Ensure file is received
-    if (!req.file) {
-      console.error('No file uploaded');
-      return res.status(400).json({ message: 'No file uploaded' });
+    if (!req.files) {
+      throw new ApiError(400,"NO File Uploaded")
+      
     }
-
+    
+    console.log(req.files.file[0].path);
     // Log the file details for debugging
-    console.log('File details:', req.file);
+    
 
     // Upload image to Cloudinary
-    const cloudinaryResponse = await cloudinary.uploader.upload(req.file.path, {
+    const cloudinaryResponse = await cloudinary.uploader.upload(req.files.file[0].path, {
       folder: 'profile_images', // Optional: Specify folder in Cloudinary
       public_id: `${Date.now()}`, // Optional: Use a custom public ID (e.g., using the timestamp)
     });
 
+    console.log("my file is ",req.user)
     // Hardcoded user ID for testing
-    const userId = '673ddbb366183c22033a9f4d'; // Replace this with the actual user ID for testing
+    const userId=req.user.linkedId;
+    const role=req.user.role;
+    console.log("my id  is",userId)
+   
+    let updatedUser;
 
-    // Update the user's profile image in the database
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { photo: cloudinaryResponse.secure_url }, // Update the user's profile image URL
-      { new: true } // Return the updated user document
-    );
+  // Use switch case to handle updates based on role
+  switch (role) {
+    case "customer":
+      updatedUser = await Customer.findByIdAndUpdate(
+        userId,
+        { imgUrl: cloudinaryResponse.secure_url }, // Update the user's profile image URL
+        { new: true } // Return the updated user document
+      );
+      break;
 
+    case "driver":
+      updatedUser = await Driver.findByIdAndUpdate(
+        userId,
+        { imgUrl: cloudinaryResponse.secure_url }, // Update the driver's profile image URL
+        { new: true } // Return the updated user document
+      );
+      break;
+
+    case "partner":
+      updatedUser = await Partner.findByIdAndUpdate(
+        userId,
+        { imgUrl: cloudinaryResponse.secure_url }, // Update the partner's profile image URL
+        { new: true } // Return the updated user document
+      );
+      break;
+
+    default:
+      return res.status(400).json({
+        success: false,
+        message: "Invalid role specified",
+      });
+  }
     if (!updatedUser) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+      throw new ApiError(404,"User not found or unable to update the profile image");
+    } 
+
+    fs.unlinkSync(req.files.file[0].path); //unlink the file from the local storage after upload successfully image
 
     // Send the updated user data back in the response
-    return res.status(200).json({
-      message: 'Image uploaded and user updated successfully',
-      imageUrl: cloudinaryResponse.secure_url,
-      user: updatedUser, // Send back updated user data
-    });
+    return res.status(200).json(new ApiResponse(200,{imageUrl:cloudinaryResponse.secure_url},"Image uploaded and user updated successfully"));
 
   } catch (error) {
     console.error('Error uploading image:', error); // Log errors
-    res.status(500).json({ message: 'Error uploading image', error: error.message });
+    fs.unlinkSync(req.files.file[0].path);  //delete the image file in localstorage because faliure of image upload on cloudinary;
+    throw new ApiError(500,error.message);
+    next(error.message);
   }
 };
+
+//log out user
+const logoutUser = async (req, res, next) => {
+  try {
+    
+    // Make sure the user object is set and exists
+    if (!req.user || !req.user._id) {
+      throw new ApiError(400,"User not authenticated");
+     
+    }
+
+    // Update user's refreshToken to undefined in the database
+    await User.findByIdAndUpdate(
+      req.user._id,
+      {
+        $set: {
+          refreshToken: undefined, // Removing the refresh token
+        }
+      },
+      { new: true }
+    );
+
+    // Clear cookies with the httpOnly and secure options
+    const options = {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'None'
+       // Ensure the `secure` flag is set only if using HTTPS
+    };
+
+    return res
+      .status(200)
+      // .clearCookie("accessToken",accessToken,options)
+      // .clearCookie("refreshToken", newRefreshToken,options)
+      .json(new ApiResponse(200, {}, "User logged Out"));
+
+  } catch (error) {
+    next(error); // Pass error to error handling middleware
+  }
+};
+
+
+//refresh access-token or give a new access token using refeshToken which is saved in database
+
+const refreshAccessToken=async (req,res,next)=>{
+  try{
+
+    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken;
+
+    if(!incomingRefreshToken){
+      throw new ApiError(401,"RefreshToken Not Found");
+    }
+    const decodeInformation = await jwt.verify(incomingRefreshToken,process.env.REFRESH_TOKEN_SECRET)
+    
+    if(!decodeInformation){
+      throw new ApiError(401,"Invalid refreshToken");
+
+    }
+
+    const user= await User.findById(decodeInformation._id);
+
+    if(!user){
+      throw new ApiError(401,"Invalid RefreshToken")
+    }
+
+    if(incomingRefreshToken !== user.refreshToken){
+      throw new ApiError(401,"Refresh token is expired or used")
+    }
+
+    const {refreshToken,accessToken}=await generateAccessAndRefereshTokens(user._id)
+    console.log(refreshToken,accessToken);
+    const options={
+      httpOnly:true,
+      secure:true
+    }
+    return res.status(200)
+    
+    .cookie("accessToken", accessToken, options)
+    .cookie("newrefreshToken", refreshToken, options)
+    .json(
+      new ApiResponse(200,{accessToken,refreshToken:refreshToken},"Access Token Refreshed")
+    )
+
+  }
+  catch(error){
+  next(error.message || "Invalid Refresh Token.")
+  }
+}
 
 // Apply the multer middleware for file upload, and then handle profile update
 // app.post('/profile', multerUpload, updateProfile);
 
-export  {registerUser,loginUser,updateProfile,getUserProfile,uploadImage}
+export  {registerUser,loginUser,updateProfile,getUserProfile,uploadImage,logoutUser,refreshAccessToken}
