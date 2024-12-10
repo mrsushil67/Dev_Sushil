@@ -42,7 +42,12 @@ const carSchema = new mongoose.Schema({
         default: "pending",
       },
     },
+
+  
+
   ],
+  category: { type: String, required: true }, // New category field
+  subCategory: { type: String, required: true }, // New subCategory field
 }, { timestamps: true });
 
 // Create a geospatial index for the location field
