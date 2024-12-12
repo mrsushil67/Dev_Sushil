@@ -106,7 +106,7 @@ export const getCarById = async(req, res) => {
     console.log("Car Id : ",carId)
     try {
         const cardetails = await Car.findById({ _id: new ObjectId(carId)}).populate('partnerId')
-        const bookings = await Booking.findById(carId)
+        const bookings = await Booking.find({ carId: new ObjectId(carId)})
         console.log("Car Details : ",cardetails)
         if(cardetails){
             res.status(200).json({
