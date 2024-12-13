@@ -18,6 +18,9 @@ export const addCar = async function (req, res, next) {
             availabilityStatus,
             location,
             features,
+            milage,
+            color,
+            description,
         } = req.body;
 
         console.log("My linked id is ", req.user);
@@ -63,6 +66,9 @@ export const addCar = async function (req, res, next) {
             seats,
             fuelType,
             pricePerDay,
+            milage,
+            color,
+            description,
             availabilityStatus: availabilityStatus || "available", // Use default if not provided
             location: {
                 type: "Point",
@@ -73,8 +79,10 @@ export const addCar = async function (req, res, next) {
             partnerId,
         });
 
+        console.log("New Car : ",newCar)
         // Save the car to the database
         const savedCar = await newCar.save();
+        console.log("Saved Car : ",savedCar)
 
         // Send a success response
         res.status(201).json(new ApiResponse(201, "Car added successfully.", savedCar));
