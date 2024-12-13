@@ -66,5 +66,3 @@ app.listen(port, () => {
 });
 
 export { app };
-
-// just check
