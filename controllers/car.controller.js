@@ -131,6 +131,25 @@ export const getCarById = async(req, res) => {
     }
 }
 
+export const getCarByUserId = async (req, res) => {
+    const userId = req.user;
+    try {
+        const carDetails = await Car.find({partnerId : new ObjectId(userId)})
+        if(carDetails){
+            res.status(200).json({
+                message: "Car details Successfully fetched",
+                data: carDetails
+            })
+        }else{
+            res.status(404).json({
+                message: "Car details not found"
+            })
+        }
+    } catch (error) {
+        res.status(500).json({ message : "Internal Server error"})
+    }
+}
+
 export const updateCarDetails = async (req,res) => {
     const carId = req.params.carId;
     const updateDetails = req.body;
